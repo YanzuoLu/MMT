@@ -1,0 +1,16 @@
+name: mmt
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.9
+  - cudatoolkit=11.6
+  - pytorch
+  - torchvision
+  - torchaudio
+  - six
+  - h5py
+  - Pillow
+  - scipy
+  - scikit-learn
+  - metric-learn
