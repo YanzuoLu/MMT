@@ -5,6 +5,8 @@ import random
 import numpy as np
 import sys
 
+from sklearnex import patch_sklearn
+patch_sklearn()
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import normalize
 
@@ -140,7 +142,7 @@ def main_worker(args):
     dataset_target = get_data(args.dataset_target, args.data_dir)
     test_loader_target = get_test_loader(dataset_target, args.height, args.width, args.batch_size, args.workers)
     cluster_loader = get_test_loader(dataset_target, args.height, args.width, args.batch_size, args.workers, testset=dataset_target.train)
-    
+
     # Create model
     model_1, model_2, model_1_ema, model_2_ema = create_model(args)
 
@@ -156,7 +158,7 @@ def main_worker(args):
         cf = (cf_1+cf_2)/2
 
         print('\n Clustering into {} classes \n'.format(args.num_clusters))
-        km = KMeans(n_clusters=args.num_clusters, random_state=args.seed, n_jobs=2).fit(cf)
+        km = KMeans(n_clusters=args.num_clusters, random_state=args.seed).fit(cf)
 
         model_1.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
         model_2.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())

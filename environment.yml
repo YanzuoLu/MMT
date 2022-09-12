@@ -14,3 +14,6 @@ dependencies:
   - scipy
   - scikit-learn
   - metric-learn
+  - pip
+  - pip:
+    - scikit-learn-intelex
