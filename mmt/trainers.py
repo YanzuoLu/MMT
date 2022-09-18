@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from .evaluation_metrics import accuracy
 from .loss import TripletLoss, CrossEntropyLabelSmooth, SoftTripletLoss, SoftEntropy
 from .utils.meters import AverageMeter
-
+from mmt.triplet_loss import triplet_loss, soft_triplet_loss
 
 class PreTrainer(object):
     def __init__(self, model, num_classes, margin=0.0):
@@ -24,7 +24,7 @@ class PreTrainer(object):
         data_time = AverageMeter()
         losses_ce = AverageMeter()
         losses_tr = AverageMeter()
-        precisions = AverageMeter()
+        # precisions = AverageMeter()
 
         end = time.time()
 
@@ -37,15 +37,17 @@ class PreTrainer(object):
             t_inputs, _ = self._parse_data(target_inputs)
             s_features, s_cls_out = self.model(s_inputs)
             # target samples: only forward
-            t_features, _ = self.model(t_inputs)
+            _ = self.model(t_inputs)
 
             # backward main #
-            loss_ce, loss_tr, prec1 = self._forward(s_features, s_cls_out, targets)
+            # loss_ce, loss_tr, prec1 = self._forward(s_features, s_cls_out, targets)
+            loss_ce = F.cross_entropy(s_cls_out, targets, label_smoothing=0.1)
+            loss_tr = triplet_loss(s_features, targets, 1, 'euclidean')
             loss = loss_ce + loss_tr
 
             losses_ce.update(loss_ce.item())
             losses_tr.update(loss_tr.item())
-            precisions.update(prec1)
+            # precisions.update(prec1)
 
             optimizer.zero_grad()
             loss.backward()
@@ -60,13 +62,11 @@ class PreTrainer(object):
                       'Data {:.3f} ({:.3f})\t'
                       'Loss_ce {:.3f} ({:.3f})\t'
                       'Loss_tr {:.3f} ({:.3f})\t'
-                      'Prec {:.2%} ({:.2%})'
                       .format(epoch, i + 1, train_iters,
                               batch_time.val, batch_time.avg,
                               data_time.val, data_time.avg,
                               losses_ce.val, losses_ce.avg,
-                              losses_tr.val, losses_tr.avg,
-                              precisions.val, precisions.avg))
+                              losses_tr.val, losses_tr.avg))
 
     def _parse_data(self, inputs):
         imgs, _, pids, _ = inputs
@@ -188,45 +188,92 @@ class MMTTrainer(object):
         losses_tri_soft = AverageMeter()
         precisions = [AverageMeter(),AverageMeter()]
 
+        # data_loader_target = iter(data_loader_target)
+
         end = time.time()
         for i in range(train_iters):
             target_inputs = data_loader_target.next()
+            # target_inputs = next(data_loader_target)
             data_time.update(time.time() - end)
 
             # process inputs
             inputs_1, inputs_2, targets = self._parse_data(target_inputs)
 
-            # forward
+            # feats_1 = self.avg_pool(self.backbone_1(imgs_1))
+            # logits_1 = self.classifier_1(self.bn_neck_1(feats_1))[:,:self.num_clusters]
+            # feats_2 = self.avg_pool(self.backbone_2(imgs_2))
+            # logits_2 = self.classifier_2(self.bn_neck_2(feats_2))[:,:self.num_clusters]
             f_out_t1, p_out_t1 = self.model_1(inputs_1)
             f_out_t2, p_out_t2 = self.model_2(inputs_2)
             p_out_t1 = p_out_t1[:,:self.num_cluster]
             p_out_t2 = p_out_t2[:,:self.num_cluster]
 
-            f_out_t1_ema, p_out_t1_ema = self.model_1_ema(inputs_1)
-            f_out_t2_ema, p_out_t2_ema = self.model_2_ema(inputs_2)
-            p_out_t1_ema = p_out_t1_ema[:,:self.num_cluster]
-            p_out_t2_ema = p_out_t2_ema[:,:self.num_cluster]
+            with torch.no_grad():
+                # feats_1_ema = self.avg_pool(self.backbone_1_ema(imgs_1))
+                # logits_1_ema = self.classifier_1_ema(self.bn_neck_1_ema(feats_1_ema))[:,:self.num_clusters]
+                # feats_2_ema = self.avg_pool(self.backbone_2_ema(imgs_2))
+                # logits_2_ema = self.classifier_2_ema(self.bn_neck_2_ema(feats_2_ema))[:,:self.num_clusters]
+                f_out_t1_ema, p_out_t1_ema = self.model_1_ema(inputs_1)
+                f_out_t2_ema, p_out_t2_ema = self.model_2_ema(inputs_2)
+                p_out_t1_ema = p_out_t1_ema[:,:self.num_cluster]
+                p_out_t2_ema = p_out_t2_ema[:,:self.num_cluster]
 
-            loss_ce_1 = self.criterion_ce(p_out_t1, targets)
-            loss_ce_2 = self.criterion_ce(p_out_t2, targets)
+            # id_loss = F.cross_entropy(logits_1, pids, label_smoothing=self.label_smoothing) + \
+            #     F.cross_entropy(logits_2, pids, label_smoothing=self.label_smoothing)
+            loss_ce_1 = F.cross_entropy(p_out_t1, targets, label_smoothing=0.1)
+            loss_ce_2 = F.cross_entropy(p_out_t2, targets, label_smoothing=0.1)
 
-            loss_tri_1 = self.criterion_tri(f_out_t1, f_out_t1, targets)
-            loss_tri_2 = self.criterion_tri(f_out_t2, f_out_t2, targets)
+            # tri_loss = triplet_loss(feats_1, pids, self.world_size, self.dist_metric) + \
+            #     triplet_loss(feats_2, pids, self.world_size, self.dist_metric)
+            loss_tri_1 = triplet_loss(f_out_t1, targets, 1, 'euclidean')
+            loss_tri_2 = triplet_loss(f_out_t2, targets, 1, 'euclidean')
 
-            loss_ce_soft = self.criterion_ce_soft(p_out_t1, p_out_t2_ema) + self.criterion_ce_soft(p_out_t2, p_out_t1_ema)
-            loss_tri_soft = self.criterion_tri_soft(f_out_t1, f_out_t2_ema, targets) + \
-                            self.criterion_tri_soft(f_out_t2, f_out_t1_ema, targets)
+            # soft_id_loss = F.cross_entropy(logits_1, F.softmax(logits_2_ema, dim=1).detach()) + \
+            #     F.cross_entropy(logits_2, F.softmax(logits_1_ema, dim=1).detach())
+            # soft_tri_loss = soft_triplet_loss(feats_1, feats_2_ema, pids, self.world_size, self.dist_metric) + \
+            #     soft_triplet_loss(feats_2, feats_1_ema, pids, self.world_size, self.dist_metric)
+            loss_ce_soft = F.cross_entropy(p_out_t1, F.softmax(p_out_t2_ema, dim=1).detach()) + \
+                F.cross_entropy(p_out_t2, F.softmax(p_out_t1_ema, dim=1).detach())
+            loss_tri_soft = soft_triplet_loss(f_out_t1, f_out_t2_ema, targets, 1, 'euclidean') + \
+                soft_triplet_loss(f_out_t2, f_out_t1_ema, targets, 1, 'euclidean')
+
+            # loss = self.soft_id_loss_weight * soft_id_loss + (1. - self.soft_id_loss_weight) * id_loss + \
+            #     self.soft_tri_loss_weight * soft_tri_loss + (1. - self.soft_tri_loss_weight) * tri_loss
+
+            # -------------------------------------------------------------------------------------------------------------
+            # # forward
+            # f_out_t1, p_out_t1 = self.model_1(inputs_1)
+            # f_out_t2, p_out_t2 = self.model_2(inputs_2)
+            # p_out_t1 = p_out_t1[:,:self.num_cluster]
+            # p_out_t2 = p_out_t2[:,:self.num_cluster]
+
+            # f_out_t1_ema, p_out_t1_ema = self.model_1_ema(inputs_1)
+            # f_out_t2_ema, p_out_t2_ema = self.model_2_ema(inputs_2)
+            # p_out_t1_ema = p_out_t1_ema[:,:self.num_cluster]
+            # p_out_t2_ema = p_out_t2_ema[:,:self.num_cluster]
+
+            # loss_ce_1 = self.criterion_ce(p_out_t1, targets)
+            # loss_ce_2 = self.criterion_ce(p_out_t2, targets)
+
+            # loss_tri_1 = self.criterion_tri(f_out_t1, f_out_t1, targets)
+            # loss_tri_2 = self.criterion_tri(f_out_t2, f_out_t2, targets)
+
+            # loss_ce_soft = self.criterion_ce_soft(p_out_t1, p_out_t2_ema) + self.criterion_ce_soft(p_out_t2, p_out_t1_ema)
+            # loss_tri_soft = self.criterion_tri_soft(f_out_t1, f_out_t2_ema, targets) + \
+            #                 self.criterion_tri_soft(f_out_t2, f_out_t1_ema, targets)
 
             loss = (loss_ce_1 + loss_ce_2)*(1-ce_soft_weight) + \
                      (loss_tri_1 + loss_tri_2)*(1-tri_soft_weight) + \
                      loss_ce_soft*ce_soft_weight + loss_tri_soft*tri_soft_weight
 
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            optimizer.zero_grad()
 
-            self._update_ema_variables(self.model_1, self.model_1_ema, self.alpha, epoch*len(data_loader_target)+i)
-            self._update_ema_variables(self.model_2, self.model_2_ema, self.alpha, epoch*len(data_loader_target)+i)
+            # self._update_ema_variables(self.model_1, self.model_1_ema, self.alpha, epoch*len(data_loader_target)+i)
+            # self._update_ema_variables(self.model_2, self.model_2_ema, self.alpha, epoch*len(data_loader_target)+i)
+            self._update_ema_variables(self.model_1, self.model_1_ema, self.alpha, epoch*train_iters+i)
+            self._update_ema_variables(self.model_2, self.model_2_ema, self.alpha, epoch*train_iters+i)
 
             prec_1, = accuracy(p_out_t1.data, targets.data)
             prec_2, = accuracy(p_out_t2.data, targets.data)
@@ -253,7 +300,7 @@ class MMTTrainer(object):
                       'Loss_ce_soft {:.3f}\t'
                       'Loss_tri_soft {:.3f}\t'
                       'Prec {:.2%} / {:.2%}\t'
-                      .format(epoch, i + 1, len(data_loader_target),
+                      .format(epoch, i + 1, train_iters,
                               batch_time.val, batch_time.avg,
                               data_time.val, data_time.avg,
                               losses_ce[0].avg, losses_ce[1].avg,
@@ -263,8 +310,9 @@ class MMTTrainer(object):
 
     def _update_ema_variables(self, model, ema_model, alpha, global_step):
         alpha = min(1 - 1 / (global_step + 1), alpha)
-        for ema_param, param in zip(ema_model.parameters(), model.parameters()):
-            ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
+        with torch.no_grad():
+            for ema_param, param in zip(ema_model.parameters(), model.parameters()):
+                ema_param.mul_(alpha).add_(param, alpha=1.-alpha)
 
     def _parse_data(self, inputs):
         imgs_1, imgs_2, pids = inputs

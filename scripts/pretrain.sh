@@ -14,4 +14,4 @@ fi
 CUDA_VISIBLE_DEVICES=${GPU} \
 python source_pretrain.py -ds ${SOURCE} -dt ${TARGET} -a ${ARCH} --seed ${SEED} --margin 0.0 \
 	--num-instances 4 -b 64 -j 4 --warmup-step 10 --lr 0.00035 --milestones 40 70 --iters 100 --epochs 80 --eval-step 40 \
-	--logs-dir logs/${SOURCE}TO${TARGET}/${ARCH}-pretrain-${SEED}
+	--logs-dir logs/${SOURCE}TO${TARGET}/${ARCH}-pretrain-empty-${SEED}

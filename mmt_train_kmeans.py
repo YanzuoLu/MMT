@@ -1,7 +1,11 @@
 from __future__ import print_function, absolute_import
 import argparse
+from collections import defaultdict
+import copy
+import datetime
 import os.path as osp
 import random
+import time
 import numpy as np
 import sys
 
@@ -14,6 +18,7 @@ import torch
 from torch import nn
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 
 from mmt import datasets
 from mmt import models
@@ -21,11 +26,14 @@ from mmt.trainers import MMTTrainer
 from mmt.evaluators import Evaluator, extract_features
 from mmt.utils.data import IterLoader
 from mmt.utils.data import transforms as T
-from mmt.utils.data.sampler import RandomMultipleGallerySampler
+import torchvision.transforms as transforms
+from torchvision.transforms.functional import InterpolationMode
+from mmt.utils.data.sampler import RandomCamAwareSampler, RandomMultipleGallerySampler
 from mmt.utils.data.preprocessor import Preprocessor
 from mmt.utils.logging import Logger
 from mmt.utils.serialization import load_checkpoint, save_checkpoint, copy_state_dict
-
+from mmt.utils.random_erasing import RandomErasing
+from mmt.models.resnet50 import resnet50
 
 best_mAP = 0
 
@@ -37,22 +45,34 @@ def get_data(name, data_dir):
 def get_train_loader(dataset, height, width, batch_size, workers,
                     num_instances, iters):
 
-    normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    train_transformer = T.Compose([
-             T.Resize((height, width), interpolation=3),
-             T.RandomHorizontalFlip(p=0.5),
-             T.Pad(10),
-             T.RandomCrop((height, width)),
-             T.ToTensor(),
-             normalizer,
-	         T.RandomErasing(probability=0.5, mean=[0.485, 0.456, 0.406])
-         ])
+    # normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
+    #                          std=[0.229, 0.224, 0.225])
+    # train_transformer = T.Compose([
+    #          T.Resize((height, width), interpolation=3),
+    #          T.RandomHorizontalFlip(p=0.5),
+    #          T.Pad(10),
+    #          T.RandomCrop((height, width)),
+    #          T.ToTensor(),
+    #          normalizer,
+	#          T.RandomErasing(probability=0.5, mean=[0.485, 0.456, 0.406])
+    #      ])
 
-    train_set = sorted(dataset.train)
+    train_transformer = transforms.Compose([
+        transforms.Resize((height, width), interpolation=InterpolationMode.BICUBIC),
+        transforms.RandomHorizontalFlip(),
+        transforms.Pad(10, fill=127),
+        transforms.RandomCrop((height, width)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.RandomErasing(scale=(0.02, 0.25))
+    ])
+
+    # train_set = sorted(dataset.train)
+    train_set = dataset.train
     rmgs_flag = num_instances > 0
     if rmgs_flag:
         sampler = RandomMultipleGallerySampler(train_set, num_instances)
+        # sampler = RandomCamAwareSampler(train_set)
     else:
         sampler = None
     train_loader = IterLoader(
@@ -60,6 +80,14 @@ def get_train_loader(dataset, height, width, batch_size, workers,
                                         transform=train_transformer, mutual=True),
                             batch_size=batch_size, num_workers=workers, sampler=sampler,
                             shuffle=not rmgs_flag, pin_memory=True, drop_last=True), length=iters)
+    # train_loader = DataLoader(
+    #     dataset=Preprocessor(train_set, root=dataset.images_dir, transform=train_transformer, mutual=True),
+    #     batch_size=batch_size,
+    #     num_workers=workers,
+    #     sampler=sampler,
+    #     pin_memory=True,
+    #     drop_last=True
+    # )
 
     return train_loader
 
@@ -84,11 +112,22 @@ def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
     return test_loader
 
 def create_model(args):
-    model_1 = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
-    model_2 = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
+    # model_1 = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
+    # model_2 = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
 
-    model_1_ema = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
-    model_2_ema = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
+    # model_1_ema = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
+    # model_2_ema = models.create(args.arch, num_features=args.features, dropout=args.dropout, num_classes=args.num_clusters)
+
+    model_1 = resnet50(pretrained=True, last_stride=1, num_classes=args.num_clusters)
+    model_2 = resnet50(pretrained=True, last_stride=1, num_classes=args.num_clusters)
+
+    model_1_ema = copy.deepcopy(model_1)
+    model_2_ema = copy.deepcopy(model_2)
+
+    for param in model_1_ema.parameters():
+        param.requires_grad_(False)
+    for param in model_2_ema.parameters():
+        param.requires_grad_(False)
 
     model_1.cuda()
     model_2.cuda()
@@ -99,20 +138,43 @@ def create_model(args):
     model_1_ema = nn.DataParallel(model_1_ema)
     model_2_ema = nn.DataParallel(model_2_ema)
 
-    initial_weights = load_checkpoint(args.init_1)
-    copy_state_dict(initial_weights['state_dict'], model_1)
-    copy_state_dict(initial_weights['state_dict'], model_1_ema)
-    model_1_ema.module.classifier.weight.data.copy_(model_1.module.classifier.weight.data)
+    # initial_weights = load_checkpoint(args.init_1)
+    # copy_state_dict(initial_weights['state_dict'], model_1)
+    # copy_state_dict(initial_weights['state_dict'], model_1_ema)
+    # model_1_ema.module.classifier.weight.data.copy_(model_1.module.classifier.weight.data)
 
-    initial_weights = load_checkpoint(args.init_2)
-    copy_state_dict(initial_weights['state_dict'], model_2)
-    copy_state_dict(initial_weights['state_dict'], model_2_ema)
-    model_2_ema.module.classifier.weight.data.copy_(model_2.module.classifier.weight.data)
+    # initial_weights = load_checkpoint(args.init_2)
+    # copy_state_dict(initial_weights['state_dict'], model_2)
+    # copy_state_dict(initial_weights['state_dict'], model_2_ema)
+    # model_2_ema.module.classifier.weight.data.copy_(model_2.module.classifier.weight.data)
 
-    for param in model_1_ema.parameters():
-        param.detach_()
-    for param in model_2_ema.parameters():
-        param.detach_()
+    f = torch.load(args.init, map_location='cpu')['model']
+    state_dict_1 = {}
+    state_dict_2 = {}
+    state_dict_1_ema = {}
+    state_dict_2_ema = {}
+    for n, p in f.items():
+        if n.startswith('backbone_1_ema'):
+            state_dict_1_ema[n[15:]] = p
+        elif n.startswith('backbone_2_ema'):
+            state_dict_2_ema[n[15:]] = p
+        elif n.startswith('backbone_1'):
+            state_dict_1[n[11:]] = p
+        elif n.startswith('backbone_2'):
+            state_dict_2[n[11:]] = p
+        elif n.startswith('bn_neck_1_ema'):
+            state_dict_1_ema['bn_neck.' + n[14:]] = p
+        elif n.startswith('bn_neck_2_ema'):
+            state_dict_2_ema['bn_neck.' + n[14:]] = p
+        elif n.startswith('bn_neck_1'):
+            state_dict_1['bn_neck.' + n[10:]] = p
+        elif n.startswith('bn_neck_2'):
+            state_dict_2['bn_neck.' + n[10:]] = p
+
+    print(model_1.module.load_state_dict(state_dict_1, strict=False))
+    print(model_2.module.load_state_dict(state_dict_2, strict=False))
+    print(model_1_ema.module.load_state_dict(state_dict_1_ema, strict=False))
+    print(model_2_ema.module.load_state_dict(state_dict_2_ema, strict=False))
 
     return model_1, model_2, model_1_ema, model_2_ema
 
@@ -153,19 +215,39 @@ def main_worker(args):
     for epoch in range(args.epochs):
         dict_f, _ = extract_features(model_1_ema, cluster_loader, print_freq=50)
         cf_1 = torch.stack(list(dict_f.values())).numpy()
+        # cf_1 = torch.stack(list(dict_f.values()))
         dict_f, _ = extract_features(model_2_ema, cluster_loader, print_freq=50)
         cf_2 = torch.stack(list(dict_f.values())).numpy()
+        # cf_2 = torch.stack(list(dict_f.values()))
         cf = (cf_1+cf_2)/2
 
+        start_time = time.time()
         print('\n Clustering into {} classes \n'.format(args.num_clusters))
-        km = KMeans(n_clusters=args.num_clusters, random_state=args.seed).fit(cf)
+        # km = KMeans(n_clusters=args.num_clusters, random_state=args.seed).fit(cf)
+        km = KMeans(n_clusters=args.num_clusters, random_state=args.seed).fit_predict(cf).tolist()
+        print(f'cluster running time {datetime.timedelta(seconds=int(time.time()-start_time))}')
 
-        model_1.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
-        model_2.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
-        model_1_ema.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
-        model_2_ema.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
+        clusters = defaultdict(list)
+        for i, label in enumerate(km):
+            if label == -1: continue
+            clusters[label].append(torch.from_numpy(cf[i]))
+        cluster_centers = [torch.stack(clusters[i]).mean(0) for i in sorted(clusters.keys())]
+        cluster_centers = torch.stack(cluster_centers)
+        cluster_centers = F.normalize(cluster_centers)
 
-        target_label = km.labels_
+        with torch.no_grad():
+            model_1.module.classifier.weight[:args.num_clusters].copy_(cluster_centers)
+            model_2.module.classifier.weight[:args.num_clusters].copy_(cluster_centers)
+            model_1_ema.module.classifier.weight[:args.num_clusters].copy_(cluster_centers)
+            model_2_ema.module.classifier.weight[:args.num_clusters].copy_(cluster_centers)
+
+        # model_1.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
+        # model_2.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
+        # model_1_ema.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
+        # model_2_ema.module.classifier.weight.data.copy_(torch.from_numpy(normalize(km.cluster_centers_, axis=1)).float().cuda())
+
+        # target_label = km.labels_
+        target_label = km
 
         # change pseudo labels
         for i in range(len(dataset_target.train)):
@@ -175,18 +257,22 @@ def main_worker(args):
 
         train_loader_target = get_train_loader(dataset_target, args.height, args.width,
                                             args.batch_size, args.workers, args.num_instances, iters)
+        # train_loader_target.sampler.set_epoch(epoch)
 
         # Optimizer
-        params = []
-        for key, value in model_1.named_parameters():
-            if not value.requires_grad:
-                continue
-            params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
-        for key, value in model_2.named_parameters():
-            if not value.requires_grad:
-                continue
-            params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
-        optimizer = torch.optim.Adam(params)
+        if epoch == 0:
+            params = [p for p in model_1.parameters() if p.requires_grad]
+            params += [p for p in model_2.parameters() if p.requires_grad]
+            param_groups = [{'params': params, 'lr': args.lr}]
+            # for key, value in model_1.named_parameters():
+            #     if not value.requires_grad:
+            #         continue
+            #     params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
+            # for key, value in model_2.named_parameters():
+            #     if not value.requires_grad:
+            #         continue
+            #     params += [{"params": [value], "lr": args.lr, "weight_decay": args.weight_decay}]
+        optimizer = torch.optim.Adam(param_groups, weight_decay=args.weight_decay)
 
         # Trainer
         trainer = MMTTrainer(model_1, model_2, model_1_ema, model_2_ema,
@@ -196,7 +282,7 @@ def main_worker(args):
 
         trainer.train(epoch, train_loader_target, optimizer,
                     ce_soft_weight=args.soft_ce_weight, tri_soft_weight=args.soft_tri_weight,
-                    print_freq=args.print_freq, train_iters=len(train_loader_target))
+                    print_freq=args.print_freq, train_iters=iters)
 
         def save_model(model_ema, is_best, best_mAP, mid):
             save_checkpoint({
@@ -256,9 +342,10 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--iters', type=int, default=800)
     # training configs
+    parser.add_argument('--init', type=str, default='', metavar='PATH')
     parser.add_argument('--init-1', type=str, default='', metavar='PATH')
     parser.add_argument('--init-2', type=str, default='', metavar='PATH')
-    parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--print-freq', type=int, default=1)
     parser.add_argument('--eval-step', type=int, default=1)
     # path

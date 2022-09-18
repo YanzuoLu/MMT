@@ -19,6 +19,7 @@ class Preprocessor(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, indices):
+        # print(indices, self.dataset[indices][0])
         if self.mutual:
             return self._get_mutual_item(indices)
         else:

@@ -8,6 +8,7 @@ from .evaluation_metrics import cmc, mean_ap
 from .feature_extraction import extract_cnn_feature
 from .utils.meters import AverageMeter
 from .utils.rerank import re_ranking
+from mmt.distance import euclidean_dist
 
 
 def extract_features(model, data_loader, print_freq=10, metric=None):
@@ -60,9 +61,10 @@ def pairwise_distance(features, query=None, gallery=None, metric=None):
     if metric is not None:
         x = metric.transform(x)
         y = metric.transform(y)
-    dist_m = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(m, n) + \
-           torch.pow(y, 2).sum(dim=1, keepdim=True).expand(n, m).t()
-    dist_m.addmm_(1, -2, x, y.t())
+    # dist_m = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(m, n) + \
+    #        torch.pow(y, 2).sum(dim=1, keepdim=True).expand(n, m).t()
+    # dist_m.addmm_(1, -2, x, y.t())
+    dist_m = euclidean_dist(x, y)
     return dist_m, x.numpy(), y.numpy()
 
 def evaluate_all(query_features, gallery_features, distmat, query=None, gallery=None,

@@ -21,7 +21,8 @@ from mmt.utils.data.preprocessor import Preprocessor
 from mmt.utils.logging import Logger
 from mmt.utils.serialization import load_checkpoint, save_checkpoint, copy_state_dict
 from mmt.utils.lr_scheduler import WarmupMultiStepLR
-
+import torchvision.transforms as transforms
+from torchvision.transforms.functional import InterpolationMode
 
 start_epoch = best_mAP = 0
 
@@ -36,14 +37,23 @@ def get_data(name, data_dir, height, width, batch_size, workers, num_instances, 
     train_set = sorted(dataset.train)
     num_classes = dataset.num_train_pids
 
-    train_transformer = T.Compose([
-             T.Resize((height, width), interpolation=3),
-             T.RandomHorizontalFlip(p=0.5),
-             T.Pad(10),
-             T.RandomCrop((height, width)),
-             T.ToTensor(),
-             normalizer
-         ])
+    # train_transformer = T.Compose([
+    #          T.Resize((height, width), interpolation=3),
+    #          T.RandomHorizontalFlip(p=0.5),
+    #          T.Pad(10),
+    #          T.RandomCrop((height, width)),
+    #          T.ToTensor(),
+    #          normalizer
+    #      ])
+
+    train_transformer = transforms.Compose([
+        transforms.Resize((height, width), interpolation=InterpolationMode.BICUBIC),
+        transforms.RandomHorizontalFlip(),
+        transforms.Pad(10),
+        transforms.RandomCrop((height, width)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
     test_transformer = T.Compose([
              T.Resize((height, width), interpolation=3),

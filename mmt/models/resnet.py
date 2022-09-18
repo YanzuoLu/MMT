@@ -33,7 +33,7 @@ class ResNet(nn.Module):
         resnet.layer4[0].conv2.stride = (1,1)
         resnet.layer4[0].downsample[0].stride = (1,1)
         self.base = nn.Sequential(
-            resnet.conv1, resnet.bn1, resnet.maxpool, # no relu
+            resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool, # no relu
             resnet.layer1, resnet.layer2, resnet.layer3, resnet.layer4)
         self.gap = nn.AdaptiveAvgPool2d(1)
 
@@ -61,9 +61,9 @@ class ResNet(nn.Module):
                 self.drop = nn.Dropout(self.dropout)
             if self.num_classes > 0:
                 self.classifier = nn.Linear(self.num_features, self.num_classes, bias=False)
-                init.normal_(self.classifier.weight, std=0.001)
-        init.constant_(self.feat_bn.weight, 1)
-        init.constant_(self.feat_bn.bias, 0)
+                # init.normal_(self.classifier.weight, std=0.001)
+        # init.constant_(self.feat_bn.weight, 1)
+        # init.constant_(self.feat_bn.bias, 0)
 
         if not pretrained:
             self.reset_params()
