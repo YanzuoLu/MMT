@@ -31,7 +31,8 @@ class Preprocessor(Dataset):
         if self.root is not None:
             fpath = osp.join(self.root, fname)
 
-        img = Image.open(fpath).convert('RGB')
+        with open(fpath, 'rb') as f:
+            img = Image.open(f).convert('RGB')
 
         if self.transform is not None:
             img = self.transform(img)
@@ -44,7 +45,8 @@ class Preprocessor(Dataset):
         if self.root is not None:
             fpath = osp.join(self.root, fname)
 
-        img_1 = Image.open(fpath).convert('RGB')
+        with open(fpath, 'rb') as f:
+            img_1 = Image.open(f).convert('RGB')
         img_2 = img_1.copy()
 
         if self.transform is not None:

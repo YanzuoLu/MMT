@@ -17,17 +17,19 @@ def extract_features(model, data_loader, print_freq=10, metric=None):
     data_time = AverageMeter()
 
     features = OrderedDict()
-    labels = OrderedDict()
+    # labels = OrderedDict()
 
     end = time.time()
     with torch.no_grad():
         for i, (imgs, fnames, pids, _) in enumerate(data_loader):
             data_time.update(time.time() - end)
 
-            outputs = extract_cnn_feature(model, imgs)
+            imgs = imgs.cuda()
+            outputs = model(imgs).float().cpu()
+            # outputs = extract_cnn_feature(model, imgs)
             for fname, output, pid in zip(fnames, outputs, pids):
                 features[fname] = output
-                labels[fname] = pid
+                # labels[fname] = pid
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -40,7 +42,8 @@ def extract_features(model, data_loader, print_freq=10, metric=None):
                               batch_time.val, batch_time.avg,
                               data_time.val, data_time.avg))
 
-    return features, labels
+    # return features, labels
+    return features
 
 def pairwise_distance(features, query=None, gallery=None, metric=None):
     if query is None and gallery is None:
@@ -111,7 +114,7 @@ class Evaluator(object):
 
     def evaluate(self, data_loader, query, gallery, metric=None, cmc_flag=False, rerank=False, pre_features=None):
         if (pre_features is None):
-            features, _ = extract_features(self.model, data_loader)
+            features = extract_features(self.model, data_loader)
         else:
             features = pre_features
         distmat, query_features, gallery_features = pairwise_distance(features, query, gallery, metric=metric)
