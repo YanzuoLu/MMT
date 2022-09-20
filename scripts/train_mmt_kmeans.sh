@@ -30,6 +30,6 @@ torchrun \
 mmt_train_kmeans.py -dt ${TARGET} -a ${ARCH} --num-clusters ${CLUSTER} \
 	--num-instances 4 --lr 0.00035 --iters 400 -b 64 --epochs 40 \
 	--soft-ce-weight 0.5 --soft-tri-weight 0.8 --dropout 0 \
-	--print-freq 10 --eval-step 1 --workers 16 \
+	--print-freq 10 --eval-step 10 --workers 16 \
 	--init /home/lyz/documents/OUDA/runs/mmt/duke2msmt/ckpt_source_pretrained.pth \
-	--logs-dir logs/${SOURCE}TO${TARGET}/${ARCH}-MMT-init-${CLUSTER}
+	--logs-dir logs/${SOURCE}TO${TARGET}/${ARCH}-MMT-init_sampler-${CLUSTER}

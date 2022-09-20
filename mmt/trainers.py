@@ -197,16 +197,16 @@ class MMTTrainer(object):
         end = time.time()
         for i in range(train_iters):
             # target_inputs = data_loader_target.next()
-            print(f'before data next {dist.get_rank()}')
+            # print(f'before data next {dist.get_rank()}')
             target_inputs = next(data_loader_target_iter)
 
             # process inputs
-            print(f'before move to gpu {dist.get_rank()}')
+            # print(f'before move to gpu {dist.get_rank()}')
             inputs_1, inputs_2, targets = self._parse_data(target_inputs)
 
             data_time.update(time.time() - end)
 
-            print(f'before forward {dist.get_rank()}')
+            # print(f'before forward {dist.get_rank()}')
             loss, loss_ce_1, loss_ce_2, loss_tri_1, loss_tri_2, loss_ce_soft, loss_tri_soft = \
                 self.model(inputs_1, inputs_2, targets, world_size)
 

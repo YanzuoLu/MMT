@@ -50,27 +50,27 @@ def get_data(name, data_dir):
 def get_train_loader(dataset, height, width, batch_size, workers,
                     num_instances, iters):
 
-    # normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
-    #                          std=[0.229, 0.224, 0.225])
-    # train_transformer = T.Compose([
-    #          T.Resize((height, width), interpolation=3),
-    #          T.RandomHorizontalFlip(p=0.5),
-    #          T.Pad(10),
-    #          T.RandomCrop((height, width)),
-    #          T.ToTensor(),
-    #          normalizer,
-	#          T.RandomErasing(probability=0.5, mean=[0.485, 0.456, 0.406])
-    #      ])
+    normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
+    train_transformer = T.Compose([
+             T.Resize((height, width), interpolation=3),
+             T.RandomHorizontalFlip(p=0.5),
+             T.Pad(10),
+             T.RandomCrop((height, width)),
+             T.ToTensor(),
+             normalizer,
+	         T.RandomErasing(probability=0.5, mean=[0.485, 0.456, 0.406])
+         ])
 
-    train_transformer = transforms.Compose([
-        transforms.Resize((height, width), interpolation=InterpolationMode.BICUBIC),
-        transforms.RandomHorizontalFlip(),
-        transforms.Pad(10, fill=127),
-        transforms.RandomCrop((height, width)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(scale=(0.02, 0.25))
-    ])
+    # train_transformer = transforms.Compose([
+    #     transforms.Resize((height, width), interpolation=InterpolationMode.BICUBIC),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.Pad(10, fill=127),
+    #     transforms.RandomCrop((height, width)),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    #     transforms.RandomErasing(scale=(0.02, 0.25))
+    # ])
 
     # train_set = sorted(dataset.train)
     train_set = dataset.train
@@ -305,7 +305,7 @@ def main_worker(args):
             print('\n Clustering into {} classes \n'.format(args.num_clusters))
             # km = KMeans(n_clusters=args.num_clusters, random_state=args.seed).fit(cf)
             km = KMeans(n_clusters=args.num_clusters, random_state=args.seed).fit_predict(cf).tolist()
-            print(f'cluster running time {datetime.timedelta(seconds=int(time.time()-start_time))}')
+            # print(f'cluster running time {datetime.timedelta(seconds=int(time.time()-start_time))}')
 
             clusters = defaultdict(list)
             for i, label in enumerate(km):
@@ -315,18 +315,18 @@ def main_worker(args):
             cluster_centers = torch.stack(cluster_centers)
             cluster_centers = F.normalize(cluster_centers)
             objects = [cluster_centers, km]
-            print('after collecting')
+            # print('after collecting')
         else:
             objects = [None, None]
 
         if WORLD_SIZE > 1:
-            print(f'before barrier {LOCAL_RANK}')
+            # print(f'before barrier {LOCAL_RANK}')
             dist.barrier()
-            print(f'before broadcast {LOCAL_RANK}')
+            # print(f'before broadcast {LOCAL_RANK}')
             dist.broadcast_object_list(objects, src=0)
 
         cluster_centers, km = objects
-        print(f'before copy weight {LOCAL_RANK}')
+        # print(f'before copy weight {LOCAL_RANK}')
         # model.module.reset_classifier(cluster_centers)
         with torch.no_grad():
             model.module.model_1.classifier.weight[:args.num_clusters].copy_(cluster_centers, non_blocking=True)
@@ -342,14 +342,14 @@ def main_worker(args):
         # target_label = km.labels_
         target_label = km
 
-        print('before reconstruct dataset')
+        # print('before reconstruct dataset')
         # change pseudo labels
         for i in range(len(dataset_target.train)):
             dataset_target.train[i] = list(dataset_target.train[i])
             dataset_target.train[i][1] = int(target_label[i])
             dataset_target.train[i] = tuple(dataset_target.train[i])
 
-        print('before get train loader')
+        # print('before get train loader')
         train_loader_target = get_train_loader(dataset_target, args.height, args.width,
                                             args.batch_size, args.workers, args.num_instances, iters)
         train_loader_target.sampler.set_epoch(epoch)
@@ -374,7 +374,7 @@ def main_worker(args):
         trainer = MMTTrainer(model, num_cluster=args.num_clusters, alpha=args.alpha)
 
         # train_loader_target.new_epoch()
-        print('before train')
+        # print('before train')
         trainer.train(epoch, train_loader_target, optimizer, WORLD_SIZE,
                     ce_soft_weight=args.soft_ce_weight, tri_soft_weight=args.soft_tri_weight,
                     print_freq=args.print_freq, train_iters=iters)
@@ -462,9 +462,9 @@ if __name__ == '__main__':
     LOCAL_RANK = int(os.environ['LOCAL_RANK']) if torch.cuda.device_count() > 1 else 0
     WORLD_SIZE = int(os.environ['WORLD_SIZE']) if torch.cuda.device_count() > 1 else 1
 
-    # if LOCAL_RANK == 0:
-    #     def print_pass(*args):
-    #         pass
-    #     builtins.print = print_pass
+    if LOCAL_RANK != 0:
+        def print_pass(*args):
+            pass
+        builtins.print = print_pass
 
     main()
